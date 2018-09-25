@@ -11,9 +11,11 @@ class Channel(object):
         self.__id2distance = {}  # 存储距离的字典 key——发射机id值 value——距离
         self.__id2direction = {}  # 存储行进方向的字典 key——发射机id值 value——方向
 
-    def update_link_loss_mmwave(self, tx_device, rx_device):
+    def update_link_loss_mmwave(self, tx_device, rx_device, single_cell):
         distance = get_distance(tx_device.get_x_point(), tx_device.get_y_point(),
                                 rx_device.get_x_point(), rx_device.get_y_point())
+        blockers = single_cell.accumulate_blockers(tx_device.get_id(), tx_device.get_x_point(), tx_device.get_y_point(),
+                                                   rx_device.get_x_point(), rx_device.get_y_point())
         self.__id2distance[tx_device.get_id()] = distance
 
         if tx_device.get_direction() == 0:  # 发射机是路边单元
@@ -39,10 +41,12 @@ class Channel(object):
         shadow = random.normalvariate(0, 10)
         # shadow = 0
         self.__link_loss[tx_device.get_id()] = link_loss + shadow'''
-        blockers = tx_device.get_blockers()
-        if blockers == 0:
-            arf = 1.77
-            beta = 70
+        # blockers = tx_device.get_blockers()
+        # blockers = 0
+
+
+        arf = 1.77
+        beta = 70
         if blockers == 1:
             arf = 1.71
             beta = 78.6

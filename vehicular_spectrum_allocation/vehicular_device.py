@@ -22,7 +22,7 @@ class BS(Interface):
         # 调用父类的构造函数
         Interface.__init__(self, i_id, i_type)
         self.__power = 20  # 基站发射功率 dBm
-        self.__x_point = 0  # 基站横坐标
+        self.__x_point = 500  # 基站横坐标
         self.__y_point = 0  # 基站纵坐标
         self.__allocated_rb = []  # 基站所使用的RB登记表
         self.__txs_id = []  # 上行链路  蜂窝链路发射机登记表
@@ -117,7 +117,7 @@ class User(Interface):
         self.__x_point = -1
         self.__y_point = -1
         self.__allocated_rb = []
-        self.__v = v
+        self.__v = v / 3.6
 
         # 随机生成车辆行进方向
         rand_num = random.random()
@@ -165,9 +165,11 @@ class User(Interface):
 
 # V2I用户类 使用User类创建V2I用户
 class CUE(User):
-    def __init__(self, i_id, i_type, power=20, v=60):
-        User.__init__(self, i_id, i_type, v)
+    def __init__(self, i_id, i_type, power=5):
+        User.__init__(self, i_id, i_type)
         self.__power = power
+        self.__tx_id = 0
+
 
     def update_location_after_spectrum_allocation(self, time):
         # 频谱分配结束后的车辆位置
@@ -176,6 +178,9 @@ class CUE(User):
 
     def get_power(self):
         return self.__power
+
+    def set_power(self, power):
+        self.__power = power
 
 
 # D2D发射机类,use class User
@@ -204,6 +209,9 @@ class D2DTx(User):
         self.__action = -1
         '''
 
+    def set_power(self, power):
+        self.__power = power
+
     def update_location_after_spectrum_allocation(self, time):
         # 频谱分配结束后的车辆位置
         x_point = self.get_x_point() + self.get_direction() * self.get_v() * time
@@ -224,6 +232,22 @@ class D2DTx(User):
 
     def set_blockers(self, blockers):
         self.__blockers = blockers
+
+    def tx_a_gain_mmwave(self, x_point, y_point, dict_id2rx):
+        rx_x_point = dict_id2rx[self.__rx_id].get_x_point()
+        rx_y_point = dict_id2rx[self.__rx_id].get_y_point()
+        tx_x_point = self.get_x_point()
+        tx_y_point = self.get_y_point()
+        gain_max = 10 * math.log10(pow(1.6162/(math.sin(math.pi / 12)), 2))
+        gain_sl = -0.4111 * math.log(math.pi/6, math.e) - 10.579
+        angle_ml = 2.6 * math.pi / 6
+        angle = math.asin((rx_y_point - tx_y_point)/(rx_x_point - tx_x_point)) - math.asin((y_point - tx_y_point) /
+                                                                                           (x_point - tx_x_point))
+        if angle in range(0, angle_ml / 2):
+            tx_a_gain = gain_max - 3.01 * pow(2 * angle / (math.pi / 6), 2)
+        else:
+            tx_a_gain = gain_sl
+        return tx_a_gain
 
     # the part of RL
     '''
@@ -309,6 +333,22 @@ class D2DRx(User):
         self.__tx_id = -1
         self.__sinr = 0
 
+    def rx_a_gain_mmwave(self, x_point, y_point, dict_id2tx):
+        tx_x_point = dict_id2tx[self.__tx_id].get_x_point()
+        tx_y_point = dict_id2tx[self.__tx_id].get_y_point()
+        rx_x_point = self.get_x_point()
+        rx_y_point = self.get_y_point()
+        gain_max = 10 * math.log10(pow(1.6162/(math.sin(math.pi / 12)), 2))
+        gain_sl = -0.4111 * math.log(math.pi/6, math.e) - 10.579
+        angle_ml = 2.6 * math.pi / 6
+        angle = math.asin((tx_y_point - rx_y_point)/(tx_x_point - rx_x_point)) - math.asin((y_point - rx_y_point) /
+                                                                                           (x_point - rx_x_point))
+        if angle in range(0, angle_ml / 2):
+            rx_a_gain = gain_max - 3.01 * pow(2 * angle / (math.pi / 6), 2)
+        else:
+            rx_a_gain = gain_sl
+        return rx_a_gain
+
     # 初始化v2v接受车辆的位置，与发射车辆举例小于5m
     def initial_user_location(self, highway, v2v_tx_vehicle):
         temp_x = (random.random() - 0.5) * 10
@@ -316,7 +356,7 @@ class D2DRx(User):
         y_point = highway.get_start_y_point() + (0.5 + self.get_direction() * random.random() / 2) * highway.get_width()
         self.set_location(x_point, y_point)
 
-     # 更新车辆位置，车辆仅直线行驶
+    # 更新车辆位置，车辆仅直线行驶
     def update_location_after_spectrum_allocation(self, time):
         # 频谱分配结束后的车辆位置
         x_point = self.get_x_point() + self.get_direction() * self.get_v() * time
@@ -375,6 +415,51 @@ class D2DRx(User):
 
             self.__sinr = 10 * math.log10(receive_target_power / (receive_inter_power + thermal_noise_pow))
             return receive_inter_power
+
+    def comp_mmwave_sinr(self, dict_id2tx, dict_id2channel_mmwave, dict_id2rx):
+        # 毫米波参数 频率 60GHz EIRP = 20 dBm  带宽：2.16GHz  Noise Figure：6dB  Noise Power : -174 + 10logB + NF dBm
+        # 天线模型 sectored model  anternna sidelobe: - 15 dB
+        band_width = 2.16 * pow(10, 9)
+
+        if len(self.get_allocated_rb()):
+            # 计算噪声功率  1个RB, 12个连续的载波, 12 * 15000 = 180000Hz
+            white_noise = -174  # -174dBm / Hz
+            noise_fig = 6  # dB
+            noise_fig = pow(10, noise_fig / 10)  # 线性值
+            thermal_noise_pow = pow(10, (white_noise - 30) / 10) * band_width   # 线性值  0.5w
+
+            # 计算接收目标信号功率
+            target_tx = dict_id2tx[self.__tx_id]  # 目标发射机
+            target_power = target_tx.get_power()  # dBm
+            target_power = pow(10, (target_power - 30) / 10)  # W
+            target_channel = dict_id2channel_mmwave[self.get_id()]
+            target_link_loss = target_channel.get_link_loss_mmwave(self.__tx_id)  # dB
+            target_gain = pow(10, -target_link_loss / 10)
+            # 发射机为配对的发射机，接收机为自己
+            tx_a_gain = target_tx.tx_a_gian_mmwave(dict_id2rx[target_tx.get_rx_id()].get_x_point(), dict_id2rx[target_tx
+                                                   .get_rx_id()].get_y_point(), dict_id2tx)
+            rx_a_gain = self.tx_a_gian_mmwave(target_tx.get_x_point(), target_tx.get_y_point(), dict_id2tx)
+            receive_target_power = target_power * target_gain * tx_a_gain * rx_a_gain
+
+            # 计算接收干扰信号总功率
+            receive_inter_power = 0
+            for tx_id in dict_id2tx:
+                if tx_id != self.__tx_id:
+                    if self.get_allocated_rb()[0] in dict_id2tx[tx_id].get_allocated_rb():
+                        inter_tx = dict_id2tx[tx_id]  # 干扰发射机
+                        inter_power = inter_tx.get_power()  # dBm
+                        inter_power = pow(10, (inter_power - 30) / 10)  # W
+                        inter_channel = dict_id2channel_mmwave[self.get_id()]
+                        inter_link_loss = inter_channel.get_link_loss_mmwave(tx_id)  # dB
+                        inter_gain = pow(10, -inter_link_loss / 10)
+                        # 接收机为自己本身，发射机为干扰发射机
+                        tx_a_gain = inter_tx.tx_a_gian_mmwave(self.get_x_point(), self.get_y_point(), dict_id2tx)
+                        rx_a_gain = self.tx_a_gian_mmwave(inter_tx.get_x_point(), inter_tx.get_y_point(), dict_id2tx)
+                        receive_inter_power += inter_power * inter_gain * tx_a_gain * rx_a_gain
+
+            self.__sinr = 10 * math.log10(receive_target_power / (receive_inter_power + thermal_noise_pow))
+            return receive_inter_power
+
 
     def get_sinr(self):
         return self.__sinr

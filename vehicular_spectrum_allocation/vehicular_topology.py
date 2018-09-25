@@ -31,6 +31,7 @@ class SingleCell(object):
         self.__list_cue_sinr_random = []
         # self.__list_cue_sinr_rl = []
         self.__list_d2d_sinr_random = []
+        self.__list_d2d_rate_random = []
         # self.__list_d2d_sinr_rl = []
 
     def initial(self):
@@ -81,7 +82,7 @@ class SingleCell(object):
             self.__dict_id2rx[i_id+self.__d2d_num] = d2d_rx
 
         # D2D用户之间的车辆
-        for tx_id in range(1+self.__cue_num, 1+self.__cue_num+self.__d2d_num):
+        '''for tx_id in range(1+self.__cue_num, 1+self.__cue_num+self.__d2d_num):
             n = 0
             tx_x_point = self.__dict_id2tx[tx_id].get_x_point()
             tx_y_point = self.__dict_id2tx[tx_id].get_y_point()
@@ -97,19 +98,28 @@ class SingleCell(object):
                              (-math.sin(math.asin(1 / 5)) + 1)):
                         n = n + 1
             self.__dict_id2tx[tx_id].set_blockers(n)
+            print(self.__dict_id2tx[tx_id].get_blockers())
+            print(tx_id)'''
+
 
         # 生成信道 一个接收机对应一个信道对象
         for rx_id in self.__dict_id2rx:  # 遍历所有的接收机
             temp_channel = Channel(rx_id)
-
+            print(rx_id)
             for tx_id in self.__dict_id2tx:  # 遍历所有的发射机
+                print(tx_id)
 
                 temp_channel.update_link_loss_cell(self.__dict_id2tx[tx_id], self.__dict_id2rx[rx_id])
                 if tx_id in range(1+self.__cue_num, 1+self.__cue_num+self.__d2d_num):
-                    temp_channel.update_link_loss_mmwave(self.__dict_id2tx[tx_id], self.__dict_id2rx[rx_id])
+                    if rx_id != 0:
 
+                        temp_channel.update_link_loss_mmwave(self.__dict_id2tx[tx_id], self.__dict_id2rx[rx_id], self)
+
+                        self.__dict_id2channel_mmwave[temp_channel.get_rx_id()] = temp_channel
                 self.__dict_id2channel[temp_channel.get_rx_id()] = temp_channel
-                self.__dict_id2channel_mmwave[temp_channel.get_rx_id()] = temp_channel
+
+        random_allocation(self.__dict_id2tx, self.__dict_id2rx, self.__rb_num)
+
 
     ''''# 在单小区范围内随机生成位置
     def random_position(self):
@@ -128,8 +138,19 @@ class SingleCell(object):
             x = r * math.sin(theta) + tx_x
             y = r * math.cos(theta) + tx_y
         return x, y'''
-    def accumulate_blockers(self):
-        for tx_id in range(1, self.__d2d_num):
+    def accumulate_blockers(self, tx_id, tx_x_point, tx_y_point, rx_x_point, rx_y_point):
+        n = 0
+        for i_id in self.__dict_id2device:
+            if i_id != tx_id:
+                x = self.__dict_id2device[i_id].get_x_point()
+                y = self.__dict_id2device[i_id].get_y_point()
+                if ((y - tx_y_point) / (x - tx_x_point) <= (rx_y_point - tx_y_point) / (rx_x_point - tx_x_point) *
+                    (math.sin(math.asin(0.01)) + 1)) & \
+                        ((y - tx_y_point) / (x - tx_x_point) >= (rx_y_point - tx_y_point) / (rx_x_point - tx_x_point) *
+                         (-math.sin(math.asin(0.01)) + 1)):
+                    n = n + 1
+        return n
+        '''for tx_id in range(1, self.__d2d_num):
             n = 0
             tx_x_point = self.__dict_id2tx[tx_id].get_x_point()
             tx_y_point = self.__dict_id2tx[tx_id].get_y_point()
@@ -144,7 +165,7 @@ class SingleCell(object):
                             ((y - tx_y_point)/(x - tx_x_point) >= (rx_y_point - tx_y_point)/(rx_x_point - tx_x_point) *
                              (-math.sin(math.asin(1 / 5)) + 1)):
                         n = n + 1
-            self.__dict_id2tx[tx_id].set_blockers(n)
+            self.__dict_id2tx[tx_id].set_blockers(n)'''
 
     def random_spectrum_allocation_work(self, slot):
         time_start = time.time()
@@ -153,19 +174,86 @@ class SingleCell(object):
         time_use = (time_end - time_start) / 3600
         for i_id in range(1, 1 + self.__cue_num + self.__d2d_num):
             self.__dict_id2device[i_id].update_location_after_spectrum_allocation(time_use)
+
+        print('40车辆位置：' + str(self.__dict_id2device[40].get_x_point())+' '+str(self.__dict_id2device[40].get_y_point()))
+
         for rx_id in self.__dict_id2rx:  # 遍历所有的接收机
-            inter_power = self.__dict_id2rx[rx_id].comp_sinr(self.__dict_id2tx, self.__dict_id2channel)
+            if self.__dict_id2rx[rx_id].get_allocated_rb()[0] == 20 & rx_id in range(1 + self.__cue_num + self.__d2d_num, 1 + self.__d2d_num * 2 + self.__cue_num):
+                inter_power = self.__dict_id2rx[rx_id].comp_mmwave_sinr(self.__dict_id2tx, self.__dict_id2channel, self.__dict_id2rx)
+                if self.__dict_id2rx[rx_id].get_sinr() > 0:
+                    rate = 2.16 * pow(10, 9) * math.log2(1 + self.__dict_id2rx[rx_id].get_sinr())
+                else:
+                    rate = 0
+            else:
+                inter_power = self.__dict_id2rx[rx_id].comp_sinr(self.__dict_id2tx, self.__dict_id2channel)
+                if rx_id != 0:
+                    if self.__dict_id2rx[rx_id].get_sinr() > 0:
+                        rate = 1.8 * pow(10, 5) * math.log2(1 + self.__dict_id2rx[rx_id].get_sinr())
+                    else:
+                        rate = 0
             sinr = self.__dict_id2rx[rx_id].get_sinr()
             if type(sinr) == float:  # D2D
+                rb_id_use = self.__dict_id2rx[rx_id].get_allocated_rb()[0]
                 tx_id = self.__dict_id2rx[rx_id].get_tx_id()
                 self.__dict_tx_id2sinr[tx_id] = sinr
-                # print('D2D接收机ID:' + str(rx_id) + ' SINR:' + str(sinr))
+                print('D2D接收机ID:' + str(rx_id) + ' '+str(rb_id_use) + ' SINR:' + str(sinr))
                 self.__list_d2d_sinr_random.append(sinr)
+                self.__list_d2d_rate_random.append(rate)
             else:  # CUE
                 for tx_id in sinr:
                     self.__dict_tx_id2sinr[tx_id] = sinr[tx_id]
-                    # print('基站对应的发射机ID:' + str(tx_id) + ' SINR:' + str(sinr[tx_id]))
+                    print('基站对应的发射机ID:' + str(tx_id) + ' SINR:' + str(sinr[tx_id]))
                     self.__list_cue_sinr_random.append(sinr[tx_id])
+
+
+    def graph_spectrum_allocation_work(self, slot):
+        time_start = time.time()
+        # random_allocation(self.__dict_id2tx, self.__dict_id2rx, self.__rb_num)
+        graph_allocation(self.__dict_id2tx, self.__dict_id2rx, self.__rb_num)
+        time_end = time.time()
+        time_use = (time_end - time_start) / 3600
+        for i_id in range(1, 1 + self.__cue_num + self.__d2d_num):
+            self.__dict_id2device[i_id].update_location_after_spectrum_allocation(time_use)
+
+        print('40车辆位置：' + str(self.__dict_id2device[40].get_x_point())+' '+str(self.__dict_id2device[40].get_y_point()))
+
+        for rx_id in self.__dict_id2rx:  # 遍历所有的接收机
+            if self.__dict_id2rx[rx_id].get_allocated_rb()[0] == 20 & rx_id in range(1 + self.__cue_num + self.__d2d_num, 1 + self.__d2d_num * 2 + self.__cue_num):
+                inter_power = self.__dict_id2rx[rx_id].comp_mmwave_sinr(self.__dict_id2tx, self.__dict_id2channel)
+                if self.__dict_id2rx[rx_id].get_sinr() > 0:
+                    rate = 2.16 * pow(10, 9) * math.log2(1 + self.__dict_id2rx[rx_id].get_sinr())
+                else:
+                    rate = 0
+            else:
+                inter_power = self.__dict_id2rx[rx_id].comp_sinr(self.__dict_id2tx, self.__dict_id2channel)
+                if rx_id != 0:
+                    if self.__dict_id2rx[rx_id].get_sinr() > 0:
+                        rate = 1.8 * pow(10, 5) * math.log2(1 + self.__dict_id2rx[rx_id].get_sinr())
+                    else:
+                        rate = 0
+            sinr = self.__dict_id2rx[rx_id].get_sinr()
+            if type(sinr) == float:  # D2D
+                rb_id_use = self.__dict_id2rx[rx_id].get_allocated_rb()[0]
+                tx_id = self.__dict_id2rx[rx_id].get_tx_id()
+                self.__dict_tx_id2sinr[tx_id] = sinr
+                print('D2D接收机ID:' + str(rx_id) + ' '+str(rb_id_use) + ' SINR:' + str(sinr))
+                self.__list_d2d_sinr_random.append(sinr)
+                self.__list_d2d_rate_random.append(rate)
+            else:  # CUE
+                for tx_id in sinr:
+                    rb_id_use = self.__dict_id2tx[tx_id].get_allocated_rb()[0]
+                    self.__dict_tx_id2sinr[tx_id] = sinr[tx_id]
+                    print('基站对应的发射机ID:' + str(tx_id) + ' '+str(rb_id_use) +' SINR:' + str(sinr[tx_id]))
+                    self.__list_cue_sinr_random.append(sinr[tx_id])
+
+    def update_location_slot(self, slot_time):
+        # 频谱分配结束后的车辆位置
+        for i_id in range(1, 1 + self.__cue_num + self.__d2d_num * 2):
+            x_point = self.__dict_id2device[i_id].get_x_point() + self.__dict_id2device[i_id].get_direction() * \
+                      self.__dict_id2device[i_id].get_v() * slot_time
+            y_point = self.__dict_id2device[i_id].get_y_point()
+            self.__dict_id2device[i_id].set_location(x_point, y_point)
+
 
     def random_allocation_work(self, slot):
         print('--------------random allocation--------------')
@@ -381,6 +469,11 @@ class SingleCell(object):
 
         with open('./result/d2d_sinr_random.txt', 'w') as f:
             for sinr in self.__list_d2d_sinr_random:
+                f.write(str(sinr))
+                f.write('\n')
+
+        with open('./result/d2d_rate_random.txt', 'w') as f:
+            for sinr in self.__list_d2d_rate_random:
                 f.write(str(sinr))
                 f.write('\n')
 
